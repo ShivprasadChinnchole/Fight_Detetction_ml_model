@@ -1,151 +1,120 @@
+import streamlit as st
 import cv2
+import tempfile
 from ultralytics import YOLO
 from behavior_detection import detect_behavior, FIGHTING_THRESHOLD
 from datetime import datetime
 
+st.set_page_config(page_title="ThreatSense AI DVR", layout="wide")
+
+st.title("🎥 ThreatSense AI DVR")
+st.write("AI-powered fight detection system")
+
 # Load YOLO model
 model = YOLO("yolov8n.pt")
 
-# Open webcam
-cap = cv2.VideoCapture(0)
+uploaded_file = st.file_uploader("Upload CCTV Video", type=["mp4","avi","mov"])
 
-print("\n" + "="*60)
-print("🎥 ThreatSense AI DVR - STARTED")
-print("="*60)
-print("📹 Camera is now monitoring...")
-print(f"⚙️  Fighting Detection Threshold: {FIGHTING_THRESHOLD}% (SENSITIVE MODE)")
-print("⚠️  Press 'q' to quit")
-print("="*60 + "\n")
+frame_window = st.image([])
+status_box = st.empty()
 
+alert_count = 0
 frame_count = 0
 last_behavior = None
-alert_count = 0
 
-while True:
+if uploaded_file:
 
-    ret, frame = cap.read()
+    # Save uploaded video temporarily
+    tfile = tempfile.NamedTemporaryFile(delete=False)
+    tfile.write(uploaded_file.read())
 
-    if not ret:
-        print("❌ Failed to read frame from camera")
-        break
+    cap = cv2.VideoCapture(tfile.name)
 
-    frame_count += 1
+    st.success("Video loaded successfully")
 
-    # YOLO person detection
-    results = model(frame)
-    person_detected = False
+    while cap.isOpened():
 
-    for r in results:
+        ret, frame = cap.read()
 
-        boxes = r.boxes
+        if not ret:
+            break
 
-        for box in boxes:
+        frame_count += 1
 
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
-            conf = float(box.conf[0])
-            cls = int(box.cls[0])
+        results = model(frame)
+        person_detected = False
 
-            label = model.names[cls]
+        for r in results:
 
-            if label == "person" and conf > 0.5:
-                person_detected = True
+            boxes = r.boxes
 
-                cv2.rectangle(frame,(x1,y1),(x2,y2),(0,255,0),2)
+            for box in boxes:
 
-                cv2.putText(frame,
-                            f"Person ({conf:.2f})",
-                            (x1,y1-10),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.7,
-                            (0,255,0),
-                            2)
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+                conf = float(box.conf[0])
+                cls = int(box.cls[0])
 
-    # Behavior Detection
-    behavior, confidence, probabilities = detect_behavior(frame)
+                label = model.names[cls]
 
-    # Print behavior status to terminal
-    if behavior != last_behavior:
-        timestamp = datetime.now().strftime("%H:%M:%S")
+                if label == "person" and conf > 0.5:
+                    person_detected = True
+
+                    cv2.rectangle(frame,(x1,y1),(x2,y2),(0,255,0),2)
+
+                    cv2.putText(frame,
+                                f"Person ({conf:.2f})",
+                                (x1,y1-10),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.7,
+                                (0,255,0),
+                                2)
+
+        # Behavior detection
+        behavior, confidence, probabilities = detect_behavior(frame)
+
         if behavior == "Fighting":
+            color = (0,0,255)
             alert_count += 1
-            print(f"\n{'='*60}")
-            print(f"⚠️  ALERT #{alert_count} - FIGHTING DETECTED!")
-            print(f"{'='*60}")
-            print(f"🕒 Time: {timestamp}")
-            print(f"👤 Person Detected: {'Yes' if person_detected else 'No'}")
-            print(f"📊 Frame: {frame_count}")
-            print(f"🎯 Confidence: {confidence:.1f}%")
-            print(f"📈 Normal: {probabilities[0]*100:.1f}% | Fighting: {probabilities[1]*100:.1f}%")
-            print(f"{'='*60}\n")
+            status = f"⚠️ FIGHTING DETECTED ({confidence:.1f}%)"
         else:
-            print(f"✅ [{timestamp}] Behavior: {behavior} ({confidence:.1f}%) | Frame: {frame_count}")
-        
-        last_behavior = behavior
+            color = (0,255,0)
+            status = f"✓ Normal ({confidence:.1f}%)"
 
-    # Display behavior status on frame
-    if behavior == "Fighting":
-        color = (0,0,255)
-        status_text = f"⚠️ ALERT: FIGHTING DETECTED! ({confidence:.1f}%)"
-    else:
-        color = (0,255,0)
-        status_text = f"✓ Status: {behavior} ({confidence:.1f}%)"
+        cv2.putText(frame,
+                    status,
+                    (30,50),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1,
+                    color,
+                    3)
 
-    # Main status text
-    cv2.putText(frame,
-                status_text,
-                (30,50),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1,
-                color,
-                3)
+        cv2.putText(frame,
+                    f"Frame: {frame_count}",
+                    (30,frame.shape[0]-50),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (255,255,255),
+                    2)
 
-    # Add additional info
-    # Show threshold and probabilities
-    threshold_text = f"Normal: {probabilities[0]*100:.1f}% | Fighting: {probabilities[1]*100:.1f}% (Threshold: {FIGHTING_THRESHOLD}%)"
-    cv2.putText(frame,
-                threshold_text,
-                (30,90),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255,255,0),
-                2)
-    
-    cv2.putText(frame,
-                f"Frame: {frame_count}",
-                (30,frame.shape[0]-50),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255,255,255),
-                2)
+        cv2.putText(frame,
+                    f"Alerts: {alert_count}",
+                    (30,frame.shape[0]-20),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (255,255,255),
+                    2)
 
-    cv2.putText(frame,
-                f"Alerts: {alert_count}",
-                (30,frame.shape[0]-20),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255,255,255),
-                2)
+        frame_window.image(frame, channels="BGR")
 
-    # Show timestamp
-    current_time = datetime.now().strftime("%H:%M:%S")
-    cv2.putText(frame,
-                current_time,
-                (frame.shape[1]-150,30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (255,255,255),
-                2)
+        status_box.write(
+            f"""
+            **Frame:** {frame_count}  
+            **Behavior:** {behavior}  
+            **Confidence:** {confidence:.1f}%  
+            **Alerts:** {alert_count}
+            """
+        )
 
-    cv2.imshow("ThreatSense AI DVR", frame)
+    cap.release()
 
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
-
-cap.release()
-cv2.destroyAllWindows()
-
-print("\n" + "="*60)
-print("🛑 ThreatSense AI DVR - STOPPED")
-print(f"📊 Total Frames Processed: {frame_count}")
-print(f"⚠️  Total Alerts: {alert_count}")
-print("="*60 + "\n")
+    st.success("Video processing completed")
